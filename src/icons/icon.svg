@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+  <rect width="96" height="96" rx="16" fill="#111827"/>
+  <g fill="#ffffff">
+    <!-- 三个定位角 (finder patterns) -->
+    <path d="M14 14h24v24H14zM20 20v12h12V20z"/>
+    <rect x="24" y="24" width="4" height="4"/>
+    <path d="M58 14h24v24H58zM64 20v12h12V20z"/>
+    <rect x="68" y="24" width="4" height="4"/>
+    <path d="M14 58h24v24H14zM20 64v12h12V64z"/>
+    <rect x="24" y="68" width="4" height="4"/>
+    <!-- 数据模块 -->
+    <rect x="46" y="14" width="6" height="6"/>
+    <rect x="46" y="26" width="6" height="6"/>
+    <rect x="46" y="46" width="6" height="6"/>
+    <rect x="58" y="46" width="6" height="6"/>
+    <rect x="70" y="46" width="6" height="6"/>
+    <rect x="46" y="58" width="6" height="6"/>
+    <rect x="58" y="58" width="6" height="6"/>
+    <rect x="70" y="70" width="6" height="6"/>
+    <rect x="58" y="70" width="6" height="6"/>
+    <rect x="14" y="46" width="6" height="6"/>
+    <rect x="26" y="46" width="6" height="6"/>
+  </g>
+</svg>

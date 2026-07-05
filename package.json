@@ -1,0 +1,16 @@
+{
+  "name": "qr-decode-firefox",
+  "version": "1.0.0",
+  "description": "Firefox extension: right-click any image to decode its QR code via cli.im (草料二维码).",
+  "private": true,
+  "scripts": {
+    "lint": "web-ext lint --source-dir=src",
+    "build": "web-ext build --source-dir=src --artifacts-dir=web-ext-artifacts --overwrite-dest",
+    "start": "web-ext run --source-dir=src",
+    "sign": "web-ext sign --source-dir=src --artifacts-dir=web-ext-artifacts --channel=unlisted"
+  },
+  "devDependencies": {
+    "web-ext": "^8.3.0"
+  },
+  "license": "MIT"
+}

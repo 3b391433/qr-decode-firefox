@@ -1,0 +1,2 @@
+# 统一用 LF，避免 Windows 上的 CRLF 破坏 CI 里 Linux runner 的 shell 步骤
+* text=auto eol=lf
