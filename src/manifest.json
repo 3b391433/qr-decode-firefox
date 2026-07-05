@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "name": "二维码解码 · QR Decode (cli.im)",
-  "version": "1.0.1",
-  "description": "右键任意图片即可解码其中的二维码，使用草料二维码 (cli.im) 的解码接口。Right-click any image to decode its QR code via cli.im.",
+  "name": "二维码解码 · QR Decode",
+  "version": "1.1.0",
+  "description": "右键任意图片，在本地离线解码其中的二维码（基于 ZXing，图片不上传）。Right-click any image to decode its QR code locally & offline (via ZXing).",
   "icons": {
     "48": "icons/icon.svg",
     "96": "icons/icon.svg"
@@ -13,14 +13,14 @@
     "<all_urls>"
   ],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["vendor/zxing.min.js", "background.js"]
   },
   "browser_specific_settings": {
     "gecko": {
       "id": "qr-decode-cliim@local.addon",
       "strict_min_version": "91.0",
       "data_collection_permissions": {
-        "required": ["websiteContent"]
+        "required": ["none"]
       }
     }
   }

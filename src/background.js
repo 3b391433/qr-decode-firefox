@@ -1,33 +1,25 @@
 "use strict";
 
 /*
- * 二维码解码 · QR Decode (via cli.im)
+ * 二维码解码 · QR Decode —— 纯本地版
  * ------------------------------------------------------------
- * 流程 (reverse-engineered from https://cli.im/deqr):
- *   1. 抓取图片字节 (background 特权 fetch，绕过 CORS)
- *   2. 上传到 cli.im 图床  ->  拿到 ncstatic.clewm.net 上的图片 URL
- *   3. 用该 URL 调用解码接口  ->  拿到 RawData
+ * 完全在浏览器内用 ZXing 解码，图片不上传到任何服务器。
+ * 唯一的网络行为是「抓取被右键的那张图片的字节」（等同于浏览器本来就要加载它）。
  *
- * 接口契约:
- *   上传:  POST https://upload-api.cli.im/upload?kid=cliim
- *          multipart/form-data，字段名 "Filedata"
- *          -> { "code":200, "data": { "url": "https://ncstatic.clewm.net/....png", ... } }
- *   解码:  POST https://cli.im/Api/Browser/deqr
- *          application/x-www-form-urlencoded，body: data=<上传返回的 url>
- *          成功 -> { "status":1, "data": { "RawData": "<内容>" } }
- *          失败 -> { "status":0, "data": { "info": "<错误信息>" } }
- *   解码接口只接受托管在 cli.im 自家 CDN 上的图片，所以上传这一步是必需的。
+ * 流程：
+ *   1. 抓取图片字节（background 特权 fetch，可拿跨域图片与 data: URI，避免 canvas 跨域污染）
+ *   2. createImageBitmap → canvas → getImageData 得到 RGBA 像素（webp/avif 等由浏览器原生解码）
+ *   3. 交给 ZXing 的 QRCodeReader 本地解码
+ *
+ * ZXing 以 UMD 形式在 background 页里注册为全局 `ZXing`（见 manifest 的 background.scripts）。
  */
 
-const UPLOAD_URL = "https://upload-api.cli.im/upload?kid=cliim";
-const DECODE_URL = "https://cli.im/Api/Browser/deqr";
-const MENU_ID = "cliim-decode-qr";
-const MSG_TYPE = "CLIIM_QR_RESULT";
+const MENU_ID = "qr-decode";
+const MSG_TYPE = "CLIIM_QR_RESULT"; // 与 overlay.js 约定的消息类型（保持不变）
 
 /* ---------- 右键菜单 ---------- */
 
 function setupMenu() {
-  // removeAll 再 create，保证 background 重新加载时不会因重复 id 报错。
   browser.contextMenus.removeAll().then(() => {
     browser.contextMenus.create({
       id: MENU_ID,
@@ -59,22 +51,21 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
 
   try {
     const blob = await fetchImage(srcUrl);
-    const prepared = await ensureDecodable(blob);
-    const uploadedUrl = await uploadImage(prepared, srcUrl);
-    const text = await decode(uploadedUrl);
+    const { data, width, height } = await getPixels(blob);
+    const text = decodeQR(data, width, height);
+    if (text == null) throw new Error("未能识别出二维码。");
     finish(tabId, overlay, { ok: true, text: text, srcUrl: srcUrl });
   } catch (err) {
     finish(tabId, overlay, { ok: false, error: normalizeError(err) });
   }
 });
 
-/* ---------- 三步流水线 ---------- */
+/* ---------- 解码流水线（全本地） ---------- */
 
 // 1. 抓取图片（background 特权 fetch，可拿跨域图片与 data: URI）
 async function fetchImage(srcUrl) {
   if (/^blob:/i.test(srcUrl)) {
-    // blob: URL 属于页面上下文，background 无法读取。
-    throw new Error("无法读取 blob: 图片（该图片由页面动态生成）。请尝试先在新标签页打开图片再解码。");
+    throw new Error("无法读取 blob: 图片（由页面动态生成）。可先在新标签页打开图片再解码。");
   }
   let resp;
   try {
@@ -88,74 +79,52 @@ async function fetchImage(srcUrl) {
   return blob;
 }
 
-// 1.5 归一化格式：cli.im 解码器只认 PNG/JPEG，webp/avif/gif/bmp 等一律先转成 PNG。
-async function ensureDecodable(blob) {
-  const type = (blob.type || "").toLowerCase();
-  if (type === "image/png" || type === "image/jpeg" || type === "image/jpg") {
-    return blob;
-  }
+// 2. 解码图片为 RGBA 像素（浏览器原生解码 webp/avif/gif/…；从 Blob 绘制不会污染 canvas）
+async function getPixels(blob) {
+  let bitmap;
   try {
-    return await toPng(blob);
+    bitmap = await createImageBitmap(blob);
   } catch (e) {
-    // 转换失败（如无法解码的 SVG）就用原图上传，让服务端给出明确错误
-    return blob;
+    throw new Error("无法解码该图片格式。");
   }
-}
-
-// 用 canvas 把任意浏览器可解码的图片重编码为 PNG（MV2 后台页有 DOM，可直接用 canvas）
-async function toPng(blob) {
-  const bitmap = await createImageBitmap(blob);
+  const width = bitmap.width;
+  const height = bitmap.height;
   const canvas = document.createElement("canvas");
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  canvas.getContext("2d").drawImage(bitmap, 0, 0);
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0);
   if (bitmap.close) bitmap.close();
-  return await new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (b) => (b ? resolve(b) : reject(new Error("canvas.toBlob 返回空"))),
-      "image/png"
-    );
-  });
+  const imageData = ctx.getImageData(0, 0, width, height);
+  return { data: imageData.data, width: width, height: height };
 }
 
-// 2. 上传到 cli.im 图床，返回其 CDN 上的 URL
-async function uploadImage(blob, srcUrl) {
-  const ext = pickExtension(blob.type, srcUrl);
-  const fd = new FormData();
-  fd.append("Filedata", blob, "qr." + ext);
-
-  const resp = await fetch(UPLOAD_URL, {
-    method: "POST",
-    body: fd,
-    credentials: "omit"
-  });
-  const json = await readJson(resp, "上传");
-  const url = json && json.data && (json.data.url || json.data.path);
-  if (Number(json && json.code) !== 200 || !url) {
-    throw new Error("上传失败：" + (json && json.msg ? json.msg : "code " + (json && json.code)));
+// 3. ZXing 本地解码。按 打包 RGB→自适应二值化 / 反色 / 全局直方图 三种方式依次尝试，提高成功率。
+function decodeQR(rgba, width, height) {
+  const size = width * height;
+  const argb = new Int32Array(size);
+  for (let i = 0, j = 0; i < size; i++, j += 4) {
+    argb[i] = (rgba[j] << 16) | (rgba[j + 1] << 8) | rgba[j + 2];
   }
-  return url;
-}
 
-// 3. 调用解码接口
-async function decode(imageUrl) {
-  const body = new URLSearchParams();
-  body.set("data", imageUrl);
+  const hints = new Map();
+  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
 
-  const resp = await fetch(DECODE_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-    credentials: "omit"
-  });
-  const json = await readJson(resp, "解码");
-  const data = json && json.data;
-  if (Number(json && json.status) === 1 && data && typeof data.RawData !== "undefined") {
-    return String(data.RawData);
+  const source = new ZXing.RGBLuminanceSource(argb, width, height);
+  const makeBitmaps = [
+    () => new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(source)),
+    () => new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(source.invert())),
+    () => new ZXing.BinaryBitmap(new ZXing.GlobalHistogramBinarizer(source))
+  ];
+
+  for (const make of makeBitmaps) {
+    try {
+      return new ZXing.QRCodeReader().decode(make(), hints).getText();
+    } catch (e) {
+      // NotFoundException 等 —— 换下一种二值化再试
+    }
   }
-  // 失败信息可能在 data.info（如"网址格式错误"），也可能在顶层 info（如"文件类型不支持"）
-  const info = (data && data.info) || json.info || "未能识别出二维码。";
-  throw new Error(info);
+  return null;
 }
 
 /* ---------- 结果呈现：优先页面浮层，失败退回系统通知 ---------- */
@@ -198,36 +167,7 @@ function notify(payload) {
   }
 }
 
-/* ---------- 工具函数 ---------- */
-
-async function readJson(resp, label) {
-  const text = await resp.text();
-  try {
-    return JSON.parse(text);
-  } catch (e) {
-    throw new Error(label + "接口返回异常 (HTTP " + resp.status + ")。");
-  }
-}
-
-function pickExtension(mime, srcUrl) {
-  const byMime = {
-    "image/png": "png",
-    "image/jpeg": "jpg",
-    "image/jpg": "jpg",
-    "image/gif": "gif",
-    "image/webp": "webp",
-    "image/bmp": "bmp",
-    "image/svg+xml": "svg",
-    "image/x-icon": "ico",
-    "image/vnd.microsoft.icon": "ico",
-    "image/avif": "avif",
-    "image/tiff": "tiff"
-  };
-  if (mime && byMime[mime.toLowerCase()]) return byMime[mime.toLowerCase()];
-  const m = /\.([a-z0-9]{2,5})(?:[?#]|$)/i.exec(srcUrl || "");
-  if (m && m[1].length <= 5) return m[1].toLowerCase();
-  return "png";
-}
+/* ---------- 工具 ---------- */
 
 function normalizeError(err) {
   if (!err) return "未知错误";
