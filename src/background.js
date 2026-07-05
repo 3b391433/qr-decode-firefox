@@ -59,7 +59,8 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
 
   try {
     const blob = await fetchImage(srcUrl);
-    const uploadedUrl = await uploadImage(blob, srcUrl);
+    const prepared = await ensureDecodable(blob);
+    const uploadedUrl = await uploadImage(prepared, srcUrl);
     const text = await decode(uploadedUrl);
     finish(tabId, overlay, { ok: true, text: text, srcUrl: srcUrl });
   } catch (err) {
@@ -85,6 +86,36 @@ async function fetchImage(srcUrl) {
   const blob = await resp.blob();
   if (!blob || blob.size === 0) throw new Error("图片内容为空。");
   return blob;
+}
+
+// 1.5 归一化格式：cli.im 解码器只认 PNG/JPEG，webp/avif/gif/bmp 等一律先转成 PNG。
+async function ensureDecodable(blob) {
+  const type = (blob.type || "").toLowerCase();
+  if (type === "image/png" || type === "image/jpeg" || type === "image/jpg") {
+    return blob;
+  }
+  try {
+    return await toPng(blob);
+  } catch (e) {
+    // 转换失败（如无法解码的 SVG）就用原图上传，让服务端给出明确错误
+    return blob;
+  }
+}
+
+// 用 canvas 把任意浏览器可解码的图片重编码为 PNG（MV2 后台页有 DOM，可直接用 canvas）
+async function toPng(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  canvas.getContext("2d").drawImage(bitmap, 0, 0);
+  if (bitmap.close) bitmap.close();
+  return await new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error("canvas.toBlob 返回空"))),
+      "image/png"
+    );
+  });
 }
 
 // 2. 上传到 cli.im 图床，返回其 CDN 上的 URL
@@ -122,7 +153,8 @@ async function decode(imageUrl) {
   if (Number(json && json.status) === 1 && data && typeof data.RawData !== "undefined") {
     return String(data.RawData);
   }
-  const info = data && data.info ? data.info : "未能识别出二维码。";
+  // 失败信息可能在 data.info（如"网址格式错误"），也可能在顶层 info（如"文件类型不支持"）
+  const info = (data && data.info) || json.info || "未能识别出二维码。";
   throw new Error(info);
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "qr-decode-firefox",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Firefox extension: right-click any image to decode its QR code via cli.im (草料二维码).",
   "private": true,
   "scripts": {

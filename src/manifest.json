@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "二维码解码 · QR Decode (cli.im)",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "右键任意图片即可解码其中的二维码，使用草料二维码 (cli.im) 的解码接口。Right-click any image to decode its QR code via cli.im.",
   "icons": {
     "48": "icons/icon.svg",

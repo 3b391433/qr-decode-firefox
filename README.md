@@ -37,8 +37,9 @@ Release 里的 `.xpi` 已由 Mozilla (AMO) 签名，可在**普通版 Firefox** 
 解码接口只接受托管在 cli.im 自家 CDN 上的图片，因此扩展分三步（全部在后台脚本完成，绕过 CORS，也顺带支持 `data:` 图片与跨域/防盗链图片）：
 
 1. **抓取**图片字节
-2. **上传**到 cli.im 图床，拿到其 CDN 图片 URL
-3. 用该 URL 调用**解码**接口，取回内容
+2. **归一化格式**：cli.im 解码器只认 PNG/JPEG，WebP / AVIF / GIF / BMP 等用 canvas 转成 PNG
+3. **上传**到 cli.im 图床，拿到其 CDN 图片 URL
+4. 用该 URL 调用**解码**接口，取回内容
 
 接口契约（逆向自 `https://cli.im/deqr`，已实测）：
 
