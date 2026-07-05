@@ -8,18 +8,19 @@
 
 ## 安装
 
-### 方式一：下载打包好的 `.xpi`（推荐）
+### 方式一：安装已签名的 `.xpi`（推荐，可永久安装）
 
-到 [Releases](https://github.com/3b391433/qr-decode-firefox/releases) 下载最新的 `.xpi`。
+Release 里的 `.xpi` 已由 Mozilla (AMO) 签名，可在**普通版 Firefox** 永久安装：
 
-> ⚠️ 未经 Mozilla 签名的 `.xpi` 只能装在 **Firefox Developer Edition / Nightly / ESR** 且把 `xpinstall.signatures.required` 设为 `false`（`about:config`）后才能永久安装。普通版 Firefox 请用下面的「临时加载」，或参见「签名」一节自行签名。
+1. 到 [Releases](https://github.com/3b391433/qr-decode-firefox/releases) 下载最新的 `.xpi`
+2. Firefox 打开 `about:addons` → 右上角齿轮 ⚙ → **「从文件安装附加组件…」(Install Add-on From File…)** → 选中该 `.xpi`
+   （或直接把 `.xpi` 文件拖进 Firefox 窗口）
 
-### 方式二：临时加载（自用 / 调试，任意版本 Firefox）
+### 方式二：临时加载（自用 / 调试，无需签名）
 
-1. 地址栏打开 `about:debugging`
-2. 左侧点 **「此 Firefox」(This Firefox)**
-3. 点 **「临时载入附加组件…」(Load Temporary Add-on…)**
-4. 选择本仓库 `src/manifest.json`
+1. 地址栏打开 `about:debugging#/runtime/this-firefox`
+2. 点 **「临时载入附加组件…」(Load Temporary Add-on…)**
+3. 选择本仓库 `src/manifest.json`
 
 > 临时加载在浏览器重启后失效。
 
@@ -68,28 +69,30 @@ npm run build   # 打包到 web-ext-artifacts/*.zip
 
 GitHub Actions（`.github/workflows/build.yml`）：
 
-- **每次 push / PR**：`web-ext lint` + `web-ext build`，把包作为 workflow artifact 上传。
-- **打 tag（`v*`）**：额外把 `.xpi` 附加到自动创建的 GitHub Release。
+- **每次 push / PR**：`web-ext lint` + `web-ext build`，未签名包作为 workflow artifact 上传。
+- **打 tag（`v*`）**：调用 `web-ext sign` 向 AMO 申请**签名**，把签名后的 `.xpi` 附加到自动创建的 GitHub Release。签名凭据已配在仓库 Secrets：`WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET`。
 
-发布一个版本：
-
-```bash
-# 改好 src/manifest.json 和 package.json 里的 version 后
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-## 签名（可选，用于永久安装）
-
-想要一个能在普通版 Firefox 永久安装的**已签名** `.xpi`，需要 [AMO API 凭据](https://addons.mozilla.org/developers/addon/api/key/)：
+发布一个新版本（⚠️ 同一版本号在 AMO **只能签一次**，务必先升版本号）：
 
 ```bash
-export WEB_EXT_API_KEY=user:xxxx:xxx
-export WEB_EXT_API_SECRET=xxxxxxxx
-npm run sign            # channel=unlisted，自行分发
+# 1) 把 src/manifest.json 和 package.json 的 version 一起改成新号，如 1.0.1
+# 2) 提交后打 tag 推送
+git commit -am "release v1.0.1"
+git tag v1.0.1
+git push && git push origin v1.0.1
 ```
 
-也可以把这两个值配到仓库 Secrets 后，在 workflow 里加一步 `web-ext sign` 自动签名。
+## 本地签名
+
+CI 已能在打 tag 时自动签名（见上）。若想在本地手动签一个：
+
+```bash
+export WEB_EXT_API_KEY=user:xxxx:xxx      # AMO JWT issuer
+export WEB_EXT_API_SECRET=xxxxxxxx        # AMO JWT secret
+npm run sign                              # channel=unlisted，自行分发；产物在 web-ext-artifacts/*.xpi
+```
+
+[AMO API 凭据在此申请](https://addons.mozilla.org/developers/addon/api/key/)。
 
 ## 隐私说明
 
@@ -111,7 +114,7 @@ qr-decode-firefox/
 │   ├── background.js      右键菜单 + 抓取/上传/解码流水线
 │   ├── overlay.js         按需注入的页面浮层 (Shadow DOM)
 │   └── icons/icon.svg     图标
-├── .github/workflows/build.yml   CI：lint + 打包 + 发布
+├── .github/workflows/build.yml   CI：lint + 打包 + 签名发布
 ├── package.json           web-ext 脚本
 ├── LICENSE                MIT
 └── README.md
