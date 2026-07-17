@@ -4,24 +4,26 @@
  * 二维码解码 · QR Decode —— 纯本地版
  * ------------------------------------------------------------
  * 完全在浏览器内用 ZXing 解码，图片不上传到任何服务器。
- * 唯一的网络行为是「抓取被右键的那张图片的字节」（等同于浏览器本来就要加载它）。
  *
- * 流程：
- *   1. 抓取图片字节（background 特权 fetch，可拿跨域图片与 data: URI，避免 canvas 跨域污染）
- *   2. createImageBitmap → canvas → getImageData 得到 RGBA 像素（webp/avif 等由浏览器原生解码）
- *   3. 交给 ZXing 的 QRCodeReader 本地解码
+ * 取像素分两级（大多数情况零网络请求）：
+ *   ① 页面侧（grab.js）：直接复用浏览器已渲染的 <img> 像素；
+ *      跨域被 canvas 污染挡住时，由内容脚本以页面身份 fetch（请求特征与页面一致）。
+ *   ② 兜底：background 特权 fetch 原图字节（可拿 data: URI、无法注入脚本的页面），
+ *      createImageBitmap → canvas → getImageData。
+ * 拿到 RGBA 后交给 ZXing 的 QRCodeReader 本地解码。
  *
  * ZXing 以 UMD 形式在 background 页里注册为全局 `ZXing`（见 manifest 的 background.scripts）。
  */
 
 const MENU_ID = "qr-decode";
 const MSG_TYPE = "CLIIM_QR_RESULT"; // 与 overlay.js 约定的消息类型（保持不变）
+const MSG_GRAB = "QR_GRAB_PIXELS"; // 与 grab.js 约定的消息类型
 
 /* ---------- 右键菜单 ---------- */
 
 function setupMenu() {
-  browser.contextMenus.removeAll().then(() => {
-    browser.contextMenus.create({
+  browser.menus.removeAll().then(() => {
+    browser.menus.create({
       id: MENU_ID,
       title: "解码二维码 (QR Decode)",
       contexts: ["image"]
@@ -35,34 +37,71 @@ browser.runtime.onStartup.addListener(setupMenu);
 
 /* ---------- 点击处理 ---------- */
 
-browser.contextMenus.onClicked.addListener(async (info, tab) => {
+browser.menus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== MENU_ID) return;
 
   const srcUrl = info.srcUrl;
   const tabId = tab && tab.id != null ? tab.id : null;
   const overlay = await ensureOverlay(tabId);
 
-  if (!srcUrl) {
-    finish(tabId, overlay, { ok: false, error: "未获取到图片地址。" });
-    return;
-  }
-
   if (overlay) sendToOverlay(tabId, { state: "busy" });
 
+  const problems = [];
+
+  // ① 页面侧：复用浏览器已渲染的图像像素（零网络；跨域时 grab.js 内部退到页面身份 fetch）
   try {
-    const blob = await fetchImage(srcUrl);
-    const { data, width, height } = await getPixels(blob);
-    const text = decodeQR(data, width, height);
-    if (text == null) throw new Error("未能识别出二维码。");
-    finish(tabId, overlay, { ok: true, text: text, srcUrl: srcUrl });
+    const grabbed = await grabFromPage(tabId, info);
+    if (grabbed && grabbed.ok) {
+      const text = decodeQR(new Uint8ClampedArray(grabbed.buf), grabbed.width, grabbed.height);
+      if (text != null) {
+        finish(tabId, overlay, { ok: true, text: text, srcUrl: srcUrl });
+        return;
+      }
+      problems.push("页面图像未识别出二维码");
+    } else {
+      problems.push((grabbed && grabbed.error) || "页面侧取图失败");
+    }
   } catch (err) {
-    finish(tabId, overlay, { ok: false, error: normalizeError(err) });
+    problems.push("页面侧取图失败：" + normalizeError(err));
   }
+
+  // ② 兜底：background 特权 fetch 原图（受限页面、data: URI、srcset 缩略图等场景）
+  if (srcUrl) {
+    try {
+      const blob = await fetchImage(srcUrl);
+      const { data, width, height } = await getPixels(blob);
+      const text = decodeQR(data, width, height);
+      if (text != null) {
+        finish(tabId, overlay, { ok: true, text: text, srcUrl: srcUrl });
+        return;
+      }
+      problems.push("原图未识别出二维码");
+    } catch (err) {
+      problems.push(normalizeError(err));
+    }
+  } else {
+    problems.push("未获取到图片地址");
+  }
+
+  finish(tabId, overlay, { ok: false, error: composeError(problems) });
 });
 
 /* ---------- 解码流水线（全本地） ---------- */
 
-// 1. 抓取图片（background 特权 fetch，可拿跨域图片与 data: URI）
+// ①. 页面侧取像素：注入 grab.js，让它从被右键的 <img> 直读 canvas（跨域时以页面身份 fetch）。
+// 受限页面（about:、AMO 等）executeScript 会抛错，由调用方捕获后走 ② 兜底。
+async function grabFromPage(tabId, info) {
+  if (tabId == null) return { ok: false, error: "无标签页上下文" };
+  const opts = typeof info.frameId === "number" ? { frameId: info.frameId } : {};
+  await browser.tabs.executeScript(tabId, Object.assign({ file: "grab.js" }, opts));
+  return browser.tabs.sendMessage(
+    tabId,
+    { type: MSG_GRAB, targetElementId: info.targetElementId, srcUrl: info.srcUrl || "" },
+    opts
+  );
+}
+
+// ②. 抓取图片（background 特权 fetch，可拿跨域图片与 data: URI）
 async function fetchImage(srcUrl) {
   if (/^blob:/i.test(srcUrl)) {
     throw new Error("无法读取 blob: 图片（由页面动态生成）。可先在新标签页打开图片再解码。");
@@ -173,4 +212,16 @@ function normalizeError(err) {
   if (!err) return "未知错误";
   if (typeof err === "string") return err;
   return err.message || String(err);
+}
+
+// 把多级尝试的失败原因合成一条可读消息（去重、去尾部标点后用「；」连接）。
+function composeError(problems) {
+  const uniq = [];
+  for (const p of problems) {
+    const s = String(p || "").replace(/[。；;\s]+$/, "");
+    if (s && uniq.indexOf(s) === -1) uniq.push(s);
+  }
+  if (uniq.length === 0) return "未知错误";
+  if (uniq.every((s) => s.indexOf("未识别出二维码") !== -1)) return "未能识别出二维码。";
+  return uniq.join("；") + "。";
 }

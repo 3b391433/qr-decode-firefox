@@ -1,6 +1,6 @@
 {
   "name": "qr-decode-firefox",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Firefox extension: right-click any image to decode its QR code locally & offline (via ZXing).",
   "private": true,
   "scripts": {
